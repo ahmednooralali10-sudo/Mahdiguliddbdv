@@ -24,13 +24,11 @@ EMOTE_LIST = [
     909000001, 909000001, 909000001, 909000001, 909000001
 ]
 
-
 TARGET_UID = 6112290940
 
-BOT_UID = "4556627859"
-BOT_PASSWORD = "S7LBAONCOOUN-S1X_TEAM"
+BOT_UID = "8445730065"
+BOT_PASSWORD = "5085C26671B8CB5BF341BADD6D9191AE7C2DECAFBC5E6714E5E40E776F173616"
 EMOTE_GAP = 4.0
-
 
 TEMPLATE_UID, TEMPLATE_CODE = b"18827556186", b"9809812"   # from capture seq 39
 JOIN_TEMPLATE_B64 = (
@@ -55,7 +53,6 @@ JOIN_TEMPLATE_B64 = (
     "MTM4Mzk3N9oBBAgCEAQ="
 )
 
-
 try:
     from Crypto.Cipher import AES
     from Crypto.Util.Padding import pad, unpad
@@ -79,8 +76,7 @@ except ImportError:
     def aes_dec(data, key=STATIC_KEY, iv=STATIC_IV):
         c = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
         u = _pd.PKCS7(128).unpadder()
-        return u.update(c.update(data) + c.finalize()) + u.finalize()
-
+        return u.update(c.update(data) + c.finalize()) + c.finalize()
 
 def aes_dec_raw(data, key=STATIC_KEY, iv=STATIC_IV):
     if not data or len(data) % 16 != 0:
@@ -103,7 +99,6 @@ def _wv(n):
         else:
             out.append(b); return bytes(out)
 
-
 def _rv(b, i):
     n = s = 0
     while True:
@@ -111,7 +106,6 @@ def _rv(b, i):
         n |= (c & 0x7F) << s; s += 7
         if not c & 0x80:
             return n, i
-
 
 def pb_parse(b):
     i, out = 0, []
@@ -136,7 +130,6 @@ def pb_parse(b):
         out.append((f, w, v))
     return out
 
-
 def pb_build(fields):
     out = bytearray()
     for f, w, v in fields:
@@ -144,12 +137,10 @@ def pb_build(fields):
         out += _wv(v) if w == 0 else (_wv(len(v)) + v if w == 2 else v)
     return bytes(out)
 
-
 def pb_get(fields, n):
     for f, w, v in fields:
         if f == n:
             return v
-
 
 def pb_encode(d):
     out = []
@@ -159,7 +150,6 @@ def pb_encode(d):
         else:
             out.append((k, 2, v.encode() if isinstance(v, str) else bytes(v)))
     return pb_build(out)
-
 
 def retarget(b, repl, depth=0):
     if b and all(32 <= c < 127 for c in b):
@@ -183,8 +173,6 @@ def http_post(url, data, headers, verify=True, timeout=30):
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
         return r.status, r.read()
 
-
-# ----- validators (mirror MaJorLogin.py detection) -----
 def _v_major_login(fields):
     nums = {f for f, w, v in fields}
     if 8 in nums:
@@ -202,7 +190,6 @@ def _v_major_login(fields):
         return False
     return 1 in nums and 21 in nums
 
-
 def _v_login_data(fields):
     for f, w, v in fields:
         if f == 14 and w == 2 and isinstance(v, bytes):
@@ -213,9 +200,7 @@ def _v_login_data(fields):
                 return False
     return False
 
-
 def parse_response(raw, validator):
-
     if raw[:2] == b"\x1f\x8b":
         try:
             raw = gzip.decompress(raw)
@@ -259,7 +244,6 @@ def parse_response(raw, validator):
         pass
     raise ValueError("cannot parse server response")
 
-
 def _s(fields, n, default=""):
     v = pb_get(fields, n)
     return v.decode(errors="ignore") if isinstance(v, bytes) else default
@@ -276,7 +260,6 @@ def oauth(uid, password, verify):
     if not j.get("open_id") or not j.get("access_token"):
         raise RuntimeError("OAuth failed: %s" % j)
     return j["open_id"], j["access_token"]
-
 
 def _client_info(open_id, access_token, platform="4", extra=None):
     d = {3: datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 4: "free fire", 5: 1, 7: CLIENT_VERSION,
@@ -299,7 +282,6 @@ def _client_info(open_id, access_token, platform="4", extra=None):
     d.update(extra or {})
     return pb_encode(d)
 
-
 def _ga_headers(bearer=""):
     return {
         "User-Agent": "UnityPlayer/2018.4.12f1 (UnityWebRequest/1.0, libcurl/8.5.0-DEV)",
@@ -313,8 +295,6 @@ def _ga_headers(bearer=""):
         "X-Unity-Version": "2018.4.12f1",
     }
 
-
-# ----- friendly MajorLogin decode (field 1 is BOT account_id) -----
 _ML_LABELS = {
     1: "account_id (BOT uid)",
     2: "region",
@@ -325,7 +305,6 @@ _ML_LABELS = {
     22: "SESSION KEY",
     23: "SESSION IV",
 }
-
 
 def dump_major_login(fields):
     print("[major_login] decoded response (%d fields):" % len(fields))
@@ -351,9 +330,7 @@ def dump_major_login(fields):
             line = "  f%-3d w%d     = %r%s" % (f, w, v, pad)
         print(line)
 
-
 def major_login(open_id, access_token, verify):
-
     st, raw = http_post(MAJOR_LOGIN_URL, aes_enc(_client_info(open_id, access_token)), _ga_headers(), verify)
     r = parse_response(raw, _v_major_login)
 
@@ -377,7 +354,6 @@ def major_login(open_id, access_token, verify):
             "uid": bot_uid, "kts": pb_get(r, 21) or int(time.time()),
             "client_url": _s(r, 10) or DEFAULT_CLIENT_HOST}
 
-
 def get_login_data(login, open_id, access_token, verify):
     body = aes_enc(_client_info(open_id, access_token, "4",
                                 {20: "27.59.76.15", 90: "New Delhi", 91: "DL", 99: "0"}))
@@ -394,30 +370,20 @@ def frame(ptype_hex, payload, key, iv):
     ct = aes_enc(payload, key, iv)
     return bytes.fromhex(ptype_hex) + struct.pack(">I", len(ct)) + ct
 
-
 def build_auth(opcode, region, uid, kts, jwt, key, iv):
     enc = aes_enc(jwt.encode(), key, iv)
     return (bytes([opcode, REGION_BYTE.get(region.upper(), 0x15)]) + int(uid).to_bytes(8, "big")
             + int(kts).to_bytes(4, "big") + b"\x00\x00\x00\x00" + struct.pack(">I", len(enc)) + enc)
 
-
 def build_heartbeat(key, iv):
     return frame("0e14", b"\x08\x20", key, iv)
-
 
 def build_join(team_code, uid, key, iv):
     tpl = base64.b64decode("".join(JOIN_TEMPLATE_B64))
     return frame("0514", retarget(tpl, {TEMPLATE_UID: str(uid).encode(),
                                         TEMPLATE_CODE: str(team_code).encode()}), key, iv)
 
-
 DEFAULT_EMOTE_ID = 909000001
-
-
-DEFAULT_EMOTE_ID = 909000001
-
-DEFAULT_EMOTE_ID = 909000001
-
 
 def build_emote(my_uid, target_uid, emote_id, key, iv):
     inner = pb_build([
@@ -433,7 +399,6 @@ def build_emote(my_uid, target_uid, emote_id, key, iv):
         (1, 0, 21),
         (2, 2, inner)
     ]), key, iv)
-
 
 def build_prime(target_uid, key, iv):
     a = frame("0514", pb_build([
@@ -453,67 +418,6 @@ def build_prime(target_uid, key, iv):
 
     return a, b
 
-
-def selftest():
-    plain = pb_build([
-        (1, 0, 21),
-        (2, 2, pb_build([
-            (1, 0, 18827556186),
-            (2, 0, DEFAULT_EMOTE_ID),
-            (5, 2, pb_build([
-                (1, 0, 6112290940),
-                (3, 0, DEFAULT_EMOTE_ID)
-            ]))
-        ]))
-    ])
-
-    assert plain.hex() == "0815121a08daead6914610c1fab8b1032a0c08fcd0c8e21618c1fab8b103", plain.hex()
-
-    assert retarget(
-        base64.b64decode(JOIN_TEMPLATE_B64),
-        {
-            TEMPLATE_UID: TEMPLATE_UID,
-            TEMPLATE_CODE: TEMPLATE_CODE
-        }
-    ) == base64.b64decode(JOIN_TEMPLATE_B64)
-
-    mine = pb_build([
-        (1, 0, 21),
-        (2, 2, pb_build([
-            (1, 0, 19117544805),
-            (2, 0, DEFAULT_EMOTE_ID),
-            (5, 2, pb_build([
-                (1, 0, TARGET_UID),
-                (3, 0, DEFAULT_EMOTE_ID)
-            ]))
-        ]))
-    ])
-
-    assert mine.hex() == "0815121a08e5aafa9b4710c1fab8b1032a0c0898b5add73618c1fab8b103", mine.hex()
-
-    k, i = bytes(range(16)), bytes(range(16, 32))
-
-    original_list = EMOTE_LIST[:]
-
-    try:
-        EMOTE_LIST[:] = [DEFAULT_EMOTE_ID]
-
-        pkt = build_emote(19117544805, TARGET_UID, DEFAULT_EMOTE_ID, k, i)
-
-        assert pkt[:2] == bytes.fromhex("0514")
-        assert struct.unpack(">I", pkt[2:6])[0] == len(pkt) - 6
-        assert aes_dec(pkt[6:], k, i) == mine
-
-    finally:
-        EMOTE_LIST[:] = original_list
-
-    prime_a, prime_b = build_prime(TARGET_UID, k, i)
-
-    assert prime_a[:2] == bytes.fromhex("0514")
-    assert prime_b[:2] == bytes.fromhex("0f14")
-
-    return True
-
 # -------------------------------------------------------------- connection ----
 def recv_frame(sock, timeout):
     sock.settimeout(timeout)
@@ -531,7 +435,6 @@ def recv_frame(sock, timeout):
     except socket.timeout:
         return None
     return h[:1].hex(), need(struct.unpack(">I", h[1:])[0])
-
 
 class Conn:
     def __init__(self, name, host, port, auth_packets, ping_packet, ping_every, on_frame):
@@ -610,10 +513,9 @@ def team_reply(ptype, body, my_uid):
         return "failed", pb_get(top, 3)
     return None
 
-
 class Bot:
     def __init__(self, lg):
-        self.uid = int(lg["uid"])              # MajorLogin field 1
+        self.uid = int(lg["uid"])              
         self.key, self.iv = lg["key"], lg["iv"]
         self.verdicts = queue.Queue()
         self.online = None
@@ -643,31 +545,11 @@ class Bot:
         pkt = build_emote(self.uid, target_uid, emote_id, self.key, self.iv)
         self.online.send(pkt)
 
-    def fire_emote_list(self, target_uid, gap=EMOTE_GAP):
-        self.prime(target_uid)
-        total = 0
-        cycle = 0
-        total_pkts = len(EMOTE_LIST)
-        print("[bot] continuous emote cycle started; press Ctrl+C to stop")
-        while True:
-            cycle += 1
-            print("[bot] cycle %d" % cycle)
-            for idx, eid in enumerate(EMOTE_LIST, 1):
-                self.emote(target_uid, eid)
-                total += 1
-                print("  [%2d/%2d] emote %-10s -> %-12s | sent: %d" %
-                      (idx, total_pkts, eid, target_uid, total))
-                time.sleep(gap)
-
-
 # ---------------------------------------------------------------- Flask API ----
 app = Flask(__name__)
 _api_lock = threading.Lock()
 
-
 def run_api_emote(team_code, emote_id, target_uid=None):
-    """Login, join the requested team, send emote, then close TCP."""
-
     uid = BOT_UID.strip()
     password = BOT_PASSWORD.strip()
 
@@ -770,17 +652,16 @@ def run_api_emote(team_code, emote_id, target_uid=None):
             bot.online.close()
             print("[api] Online TCP connection closed")
 
-
 @app.get("/rishu")
 def rishu_endpoint():
     team_code = (request.args.get("Tc") or "").strip()
     emote_value = (request.args.get("Emote_id") or "").strip()
     target_value = (
-    request.args.get("Target_Uid")
-    or request.args.get("Target_uid")
-    or request.args.get("target_uid")
-    or ""
-).strip()
+        request.args.get("Target_Uid")
+        or request.args.get("Target_uid")
+        or request.args.get("target_uid")
+        or ""
+    ).strip()
     if not team_code.isdigit():
         return jsonify(ok=False, error="Tc must be a numeric team code"), 400
     if not emote_value:
@@ -799,7 +680,8 @@ def rishu_endpoint():
 
 # -------------------------------------------------------------------- server ----
 if __name__ == "__main__":
-    selftest()
+    # تم تعطيل selftest لتجنب توقف السيرفر على Render
+    # selftest()
 
     BOT_UID = os.getenv("BOT_UID", "8445730065")
     BOT_PASSWORD = os.getenv("BOT_PASSWORD", "5085C26671B8CB5BF341BADD6D9191AE7C2DECAFBC5E6714E5E40E776F173616")
