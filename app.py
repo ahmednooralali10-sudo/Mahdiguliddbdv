@@ -1,572 +1,341 @@
-import os, json, time, socket, threading, urllib3, requests, random
+import base64, gzip, json, socket, ssl, struct, threading, time
+import urllib.parse, urllib.request, os
 from flask import Flask, request, jsonify
-from Crypto.Util.Padding import pad, unpad
-from Crypto.Cipher import AES
-from protobuf_decoder.protobuf_decoder import Parser
+from datetime import datetime
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# ------------------------------------------------------------------ config ----
+STATIC_KEY = b"Yg&tc%DEuh6%Zc^8"
+STATIC_IV  = b"6oyZDr22E3ychjM%"
+CLIENT_SECRET = "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3"
+APP_ID = "100067"
+OAUTH_URL = "https://100067.connect.garena.com/oauth/guest/token/grant"
+MAJOR_LOGIN_URL = "https://loginbp.ppmainecoonghj.com/MajorLogin"
+DEFAULT_CLIENT_HOST = "https://client.ind.freefiremobile.com"
+CLIENT_VERSION, RELEASE_VERSION, REGION = "2.133.11", "OB55", "IND"
 
-xK = b'Yg&tc%DEuh6%Zc^8'
-xV = b'6oyZDr22E3ychjM%'
+AUTH_OPCODES = (0x93, 0x95, 0x89, 0x7B, 0x69, 0x8F, 0x78, 0x83)
+ONLINE_OPCODES = (0x8D, 0x86, 0x67) + AUTH_OPCODES
+REGION_BYTE = {"BD": 0x19, "IND": 0x14}
 
-# يمكنك تعديل بيانات الحساب الافتراضية هنا أو عبر Environment Variables
-ACCOUNTS = [("4556624361", "S7L9OR6KCB8G-S1X_TEAM")]
-TARGET_UID = 18811131543
-EMOTE_ID = 909000012
-SELF_EMOTE = False
+TEMPLATE_UID, TEMPLATE_CODE = b"18827556186", b"9809812"
+JOIN_TEMPLATE_B64 = (
+    "CAQSzwoiCAEJChIZICcpKgc5ODA5ODEyMAZAAUq5CQoZSU5ESUFfTk9USU5JVD8xODgyNzU1NjE4NhAXGvcDd19ZUBQDCEQEAg4I"
+    "U1YNB1ABWwMCWQJUVwQOVgAIU1ddAA9TAlMLABsAB0R0W0VBThoIFAAfGwAESQVRfHoLXm5Ja3l/Z05Eem5ff3wHcA1gfABxdQwV"
+    "CU1jBV9hVV5oZ1J/BG9vB39EcU1+A0x3XWRWdH8FG1dZVkUZZn0adUhIA0pgXHB9Yl1jTmBYZlRZVwVUUVoPUX4DCXkCA3wKEQkL"
+    "TVFcVll9V2Zac2gHHVNmUUMNA2Rgc35ES3pacAgUCkRMBmYXWmVnGm0LfEtrXEtaRHxeThl2E15OS3ALFgdLaHx2AWdqYlcAZH9r"
+    "am9QYktERAF0AEJTS1BBBRIPSX1eQmJfY2ZIRldNYw9HDl0CAAB6XH14XlZQXwwVCQlKckdAe05hQ3J9WlQAZ3N5anx/d09iemUa"
+    "WXpPBRIFRF9/e08HHUJ/Vn5Td2J9c0RweghCWHoJeVABVA8bDE1bSEl8TFNBfmB1eFBQUmxvY0RUam12BklTWlIIFAAIRFJsQGMG"
+    "TGVNXXQXYWxaYH13YWBDXXBiT0AAbwgWAk5gVnpkSnAGVwx6dloTf3hNfExgBhxnanxaVwgMFQJJZlluSX0ZAXB7UQMcClZ8WXd9"
+    "f0VPQm9QAE5aCxsHSnsMeVhZXGJ8aEFEAG1HeQ4AclAMcHENeW5lAAUiBHldVl0wDjoKEnB2YG9zZ2QcHEIIMi4xMzMuMTJIAlAC"
+    "Wv0EA2JiU1E2ekhJMkFzSUFkVjJLeW9WbGRtZ201L3lmUE1Hd09oMmlnekdJd0xKKzRxb2JJZU1ybkxOUm1xU1kxcjh3Nm5Lb3M2"
+    "Y1lqcEk0RWVUVnE2YWhLcUttN1hEVEc4UlFIWjNvOWpBMzFKbXZyRFFncmZXb3Z4YU5VbU9CNXF6UTlGZ0tGbEtqRS9hd25oOXhQ"
+    "cTdqVUlxMVUxTHpreWIydXV1QXYzemRQYkxpbUQva1FwMVMxNEpjbmdyd2NtQUtvWmE0ZHpJOFkyanZ3ZTJ3QWVLbERxMU5VWSsx"
+    "WDVhcXY3Unl1bDIzVVR0eUkzajBhbEI3NC91SkhGUC83NFhncVFHRHhzcDRJeUIxUWFDcWZ1M3I0VVdheUlMd1BXMGhdC9sQkF4"
+    "Um43RUg5aXhBUTdleEdVdWdHVzBVZ0NrMHBXenAvNWNWZVB0cTRybzlWRmNHN1VWbVlTY1oxZm1lWjdvUHIrNXpuemlSS1V5bUR1"
+    "L1JhNHMyY2VUczVaKzFzZ1RwVXAwZk5mNXV5dzBDd1VzeTdsVTdzTGtVZWJ3NThjeGtSYkNVUUFTVWVudGk4NGNyazVhdks4aXVS"
+    "elFsbVpNb3VSb1M4ZGhxWFo2NU1FTDlyVzFTWmFtMEVxNnRFajYxMHgxSEFjUzlVUlVLUG15OHg1QWc3Z2pqVnpIQU1DbWtUVXda"
+    "TTVlYzFaazRFZ2lPd3dBbFhOeDFncGpoZW4zWlhCeTlYSFQyOXI0SkJlc3VYWlA0cEJlSkkwRjB3NGduRUFMaFZsZll2ekRiY3NO"
+    "S3pRSVhvWjk4S0ZsYW01a1pTUlhiN0RkZ1NOVFhsV2xWWER3enFrPVoNCgRJREMxED0aA0lORFoNCgRJREMyEBEaA0lORGoCZW6C"
+    "AQQ3T1IZogEFCAMQ+QKiAQUIBBCHA6IBBQgFEJ8BogEFCB0QyAGiAQQIFhBcogEFCA4QkAGiAQIIFboBFWFfNTg2OTU0NjgyNDM0"
+    "MTM4Mzk3N9oBBAgCEAQ="
+)
 
-SOCKET_TIMEOUT = 10
-JOIN_WAIT = 3.0
-AUTH_WAIT = 0.5
-DANCE_WAIT = 1.5
-EXIT_WAIT = 0.5
+try:
+    from Crypto.Cipher import AES
+    from Crypto.Util.Padding import pad, unpad
+    _AES_BACKEND = "pycryptodome"
+    def aes_enc(data, key=STATIC_KEY, iv=STATIC_IV):
+        return AES.new(key, AES.MODE_CBC, iv).encrypt(pad(data, 16))
+    def aes_dec(data, key=STATIC_KEY, iv=STATIC_IV):
+        return unpad(AES.new(key, AES.MODE_CBC, iv).decrypt(data), 16)
+except ImportError:
+    from cryptography.hazmat.primitives import padding as _pd
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    _AES_BACKEND = "cryptography"
+    def aes_enc(data, key=STATIC_KEY, iv=STATIC_IV):
+        p = _pd.PKCS7(128).padder()
+        c = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+        return c.update(p.update(data) + p.finalize()) + c.finalize()
+    def aes_dec(data, key=STATIC_KEY, iv=STATIC_IV):
+        c = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+        u = _pd.PKCS7(128).unpadder()
+        return u.update(c.update(data) + c.finalize()) + c.finalize()
 
-
-def EnV_VaRiAnT(n):
-    d = []
-    while True:
-        b = n & 0x7F
-        n >>= 7
-        if n:
-            b |= 0x80
-        d.append(b)
-        if not n:
-            break
-    return bytes(d)
-
-
-def ProToBuF(Fields):
-    p = bytearray()
-    for f, v in Fields.items():
-        if isinstance(v, bool):
-            p.extend(EnV_VaRiAnT((f << 3) | 0))
-            p.extend(EnV_VaRiAnT(1 if v else 0))
-        elif isinstance(v, int):
-            p.extend(EnV_VaRiAnT((f << 3) | 0))
-            p.extend(EnV_VaRiAnT(v))
-        elif isinstance(v, str):
-            d = v.encode()
-            p.extend(EnV_VaRiAnT((f << 3) | 2))
-            p.extend(EnV_VaRiAnT(len(d)))
-            p.extend(d)
-        elif isinstance(v, (bytes, bytearray)):
-            d = bytes(v)
-            p.extend(EnV_VaRiAnT((f << 3) | 2))
-            p.extend(EnV_VaRiAnT(len(d)))
-            p.extend(d)
-        elif isinstance(v, dict):
-            d = ProToBuF(v)
-            p.extend(EnV_VaRiAnT((f << 3) | 2))
-            p.extend(EnV_VaRiAnT(len(d)))
-            p.extend(d)
-        elif isinstance(v, list):
-            for item in v:
-                if isinstance(item, dict):
-                    d = ProToBuF(item)
-                    p.extend(EnV_VaRiAnT((f << 3) | 2))
-                    p.extend(EnV_VaRiAnT(len(d)))
-                    p.extend(d)
-    return bytes(p)
-
-
-def Read_VaRiAnT(data, pos):
-    result = 0
-    shift = 0
-    while pos < len(data):
-        b = data[pos]
-        pos += 1
-        result |= (b & 0x7F) << shift
-        if not (b & 0x80):
-            break
-        shift += 7
-    return result, pos
-
-
-def Parse_ProToBuF(data):
-    fields = {}
-    pos = 0
-    n = len(data)
-    while pos < n:
-        try:
-            key, pos = Read_VaRiAnT(data, pos)
-        except:
-            break
-        fn = key >> 3
-        wt = key & 0x07
-        try:
-            if wt == 0:
-                val, pos = Read_VaRiAnT(data, pos)
-            elif wt == 2:
-                ln, pos = Read_VaRiAnT(data, pos)
-                val = data[pos:pos + ln]
-                pos += ln
-            elif wt == 5:
-                val = data[pos:pos + 4]
-                pos += 4
-            elif wt == 1:
-                val = data[pos:pos + 8]
-                pos += 8
-            else:
-                break
-        except:
-            break
-        fields.setdefault(fn, []).append(val)
-    return fields
-
-
-def Ua():
-    return random.choice(['4.0.18P6', '4.0.19P7', '4.0.20P1', '4.1.0P3', '4.1.5P2', '4.2.1P8', '4.2.3P1', '5.0.1B2', '5.0.2P4', '5.1.0P1', '5.2.0B1', '5.2.5P3', '5.3.0B1', '5.3.2P2', '5.4.0P1', '5.4.3B2', '5.5.0P1', '5.5.2P3'])
-
-
-def EnC_PacKeT(HeX, K, V):
-    return AES.new(K, AES.MODE_CBC, V).encrypt(pad(bytes.fromhex(HeX), 16)).hex()
-
-
-def EnC_Vr(N):
-    H = []
-    while True:
-        BesTo = N & 0x7F
-        N >>= 7
-        if N:
-            BesTo |= 0x80
-        H.append(BesTo)
-        if not N:
-            break
-    return bytes(H)
-
-
-def CrEaTe_VarianT(field_number, value):
-    return EnC_Vr((field_number << 3) | 0) + EnC_Vr(value)
-
-
-def CrEaTe_LenGTh(field_number, value):
-    encoded_value = value.encode() if isinstance(value, str) else value
-    return EnC_Vr((field_number << 3) | 2) + EnC_Vr(len(encoded_value)) + encoded_value
-
-
-def CrEaTe_ProTo(fields):
-    packet = bytearray()
-    for field, value in fields.items():
-        if isinstance(value, dict):
-            packet.extend(CrEaTe_LenGTh(field, CrEaTe_ProTo(value)))
-        elif isinstance(value, int):
-            packet.extend(CrEaTe_VarianT(field, value))
-        elif isinstance(value, str) or isinstance(value, bytes):
-            packet.extend(CrEaTe_LenGTh(field, value))
-        elif isinstance(value, list):
-            for item in value:
-                if isinstance(item, dict):
-                    packet.extend(CrEaTe_LenGTh(field, CrEaTe_ProTo(item)))
-    return packet
-
-
-def DecodE_HeX(H):
-    F = str(hex(H))[2:]
-    return "0" + F if len(F) == 1 else F
-
-
-def GeneRaTePk(Pk, N, K, V):
-    PkEnc = EnC_PacKeT(Pk, K, V)
-    _ = DecodE_HeX(int(len(PkEnc) // 2))
-    if len(_) == 2:
-        HeadEr = N + "000000"
-    elif len(_) == 3:
-        HeadEr = N + "00000"
-    elif len(_) == 4:
-        HeadEr = N + "0000"
-    elif len(_) == 5:
-        HeadEr = N + "000"
-    else:
-        HeadEr = N + "00000"
-    return bytes.fromhex(HeadEr + _ + PkEnc)
-
-
-def Fix_PackEt(parsed_results):
-    result_dict = {}
-    for result in parsed_results:
-        field_data = {'wire_type': result.wire_type}
-        if result.wire_type == "varint":
-            field_data['data'] = result.data
-        if result.wire_type == "string":
-            field_data['data'] = result.data
-        if result.wire_type == "bytes":
-            field_data['data'] = result.data
-        elif result.wire_type == 'length_delimited':
-            field_data["data"] = Fix_PackEt(result.data.results)
-        result_dict[result.field] = field_data
-    return result_dict
-
-
-def DeCode_PackEt(input_text):
-    try:
-        parsed_results = Parser().parse(input_text)
-        return json.dumps(Fix_PackEt(parsed_results))
-    except:
+def aes_dec_raw(data, key=STATIC_KEY, iv=STATIC_IV):
+    if not data or len(data) % 16 != 0:
         return None
-
-
-def decrypt_0515_packet(raw_bytes, key, iv, label=""):
     try:
-        head = raw_bytes[:6].hex()
-        if not head.startswith("0515"):
-            return None
-        total_after_header = len(raw_bytes) - 6
-        if total_after_header < 2:
-            return None
-        idx = raw_bytes.find(b'\x05\x15')
-        if idx == -1:
-            idx = 0
-        start = idx + 2
-        length_byte = raw_bytes[start] if start < len(raw_bytes) else 0
-        payload = raw_bytes[start + 1:start + 1 + length_byte]
-        if len(payload) < 16:
-            payload = raw_bytes[start + 1:]
-        if len(payload) % 16 != 0:
-            payload = payload[:len(payload) // 16 * 16]
-        dec = AES.new(key, AES.MODE_CBC, iv).decrypt(payload)
-        try:
-            dec = unpad(dec, 16)
-        except:
-            pass
-        return Parse_ProToBuF(dec)
+        if _AES_BACKEND == "pycryptodome":
+            return AES.new(key, AES.MODE_CBC, iv).decrypt(data)
+        c = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+        return c.update(data) + c.finalize()
     except Exception:
         return None
 
+def _wv(n):
+    out = bytearray()
+    while True:
+        b = n & 0x7F; n >>= 7
+        if n: out.append(b | 0x80)
+        else: out.append(b); return bytes(out)
 
-def Join_Team(team_code, key, iv):
-    fields = {1: bytes.fromhex("01090a0b121619201d2729"), 2: 40, 3: bytes.fromhex("01090a0b121619201d2729"), 4: "w\\Z]", 6: 12, 7: bytes.fromhex("01090a0b121619201d2729"), 8: "1.132.9", 9: 6, 10: 2, 11: bytes.fromhex("01090a0b121619201d2729")}
-    f = {1: 4, 2: {4: bytes.fromhex("01090a0b121619201d2729"), 5: str(team_code), 6: 6, 8: 1, 9: fields, 11: {1: "IDC1", 2: 99, 3: "ME"}, 13: "ar", 16: bytes.fromhex("374f521955"), 20: [{1: 3, 2: 360}, {1: 4, 2: 391}, {1: 5, 2: 156}, {1: 29, 2: 204}, {1: 22, 2: 118}, {1: 14, 2: 139}, {1: 21}], 27: {1: 2, 2: 4}}}
-    return GeneRaTePk(CrEaTe_ProTo(f).hex(), "0515", key, iv)
+def _rv(b, i):
+    n = s = 0
+    while True:
+        c = b[i]; i += 1
+        n |= (c & 0x7F) << s; s += 7
+        if not c & 0x80: return n, i
 
+def pb_parse(b):
+    i, out = 0, []
+    while i < len(b):
+        k, i = _rv(b, i)
+        f, w = k >> 3, k & 7
+        if f == 0: raise ValueError("field 0")
+        if w == 0: v, i = _rv(b, i)
+        elif w == 2:
+            l, i = _rv(b, i)
+            if i + l > len(b): raise ValueError("overrun")
+            v, i = b[i:i + l], i + l
+        elif w == 1: v, i = b[i:i + 8], i + 8
+        elif w == 5: v, i = b[i:i + 4], i + 4
+        else: raise ValueError("wire type")
+        out.append((f, w, v))
+    return out
 
-def Emote_k(target_uid, emote_id, bot_uid, key, iv):
-    fields = {
-        1: 21,
-        2: {
-            1: int(bot_uid),
-            2: 909000001,
-            5: {
-                1: int(target_uid),
-                3: int(emote_id),
-            }
-        }
-    }
-    return GeneRaTePk(CrEaTe_ProTo(fields).hex(), '0515', key, iv)
+def pb_build(fields):
+    out = bytearray()
+    for f, w, v in fields:
+        out += _wv(f << 3 | w)
+        out += _wv(v) if w == 0 else (_wv(len(v)) + v if w == 2 else v)
+    return bytes(out)
 
+def pb_get(fields, n):
+    for f, w, v in fields:
+        if f == n: return v
 
-def ExiT(key, iv):
-    fields = {1: 7, 2: {1: 0}}
-    return GeneRaTePk(str(CrEaTe_ProTo(fields).hex()), '0515', key, iv)
+def pb_encode(d):
+    out = []
+    for k, v in d.items():
+        if isinstance(v, int): out.append((k, 0, v))
+        else: out.append((k, 2, v.encode() if isinstance(v, str) else bytes(v)))
+    return pb_build(out)
 
-
-def AutH_Chat(chat_type, owner_uid, chat_code, key, iv):
-    fields = {1: chat_type, 2: {1: int(owner_uid), 3: "en", 4: str(chat_code)}}
-    return GeneRaTePk(CrEaTe_ProTo(fields).hex(), '1215', key, iv)
-
-
-def PyL(access_token, open_id):
-    P = {}
-    P[3] = time.strftime("%Y-%m-%d %H:%M:%S"); P[4] = "free fire"; P[5] = 1; P[7] = "1.132.9"
-    P[8] = "Android OS 14 / API-34 (UP1A.231005.007/V816.0.15.0.UNQMIXM)"
-    P[9] = "Handheld"; P[10] = "Grameenphone"; P[11] = "CarrierDataNetwork"
-    P[12] = 1666; P[13] = 750; P[14] = "352"; P[15] = "ARM64 FP ASIMD AES | 2400 | 8"
-    P[16] = 5563; P[17] = "Mali-G57 MC2"
-    P[18] = "OpenGL ES 3.2 v1.r32p1-01eac0.0a0b917d9265b4c01be9925306306139"
-    P[19] = "Google|9cc73f7a-91f6-40f6-87ec-5b67e597eb8c"; P[20] = "59.152.5.188"
-    P[21] = "en"; P[22] = open_id; P[23] = "8"; P[24] = "Handheld"
-    P[25] = "Xiaomi 2312DRAABI"; P[26] = "BD"; P[29] = access_token; P[30] = 1
-    P[41] = "Grameenphone"; P[42] = "Cellular"
-    P[57] = "7428b253defc164018c604a1ebbfebdf"
-    P[60] = 109685; P[61] = 58294; P[62] = 797; P[63] = 18000; P[64] = 58818; P[65] = 109685
-    P[66] = 58818; P[67] = 109685; P[73] = 2
-    P[74] = "/data/app/~~cqQgpdMykLQEM3odipXatw==/com.dts.freefireth-G6e5yOt1dtuXG5Ambhj18g==/lib/arm64"
-    P[76] = 1
-    P[77] = "b8e0cd5e295eee42f5860d3c86e483dd|/data/app/~~cqQgpdMykLQEM3odipXatw==/com.dts.freefireth-G6e5yOt1dtuXG5Ambhj18g==/base.apk"
-    P[78] = 3; P[79] = 2; P[81] = "64"; P[83] = "2019121229"; P[85] = 3; P[86] = "OpenGLES2"
-    P[87] = 4095; P[88] = 8
-    P[89] = b"FwQVTgUPX1UaUllDDwcWCRBpWAUOUgsvA1snWlBaO1kFYg=="
-    P[90] = "Dhaka"; P[91] = "C"; P[92] = 8043; P[93] = "android"
-    P[94] = "KqsHT4XbSZhqerDNUhjbS3DxG/4+I62zQU2tZFJN91kBUICAlZ5yujshLKvjlk/KiShfKfis8EeB1PMhFHIodWPncZC4fCHYF3TcTwNj95aWY/S3"
-    P[95] = 111207; P[96] = '{"cur_rate":[60,90,120],"support_etc2":false}'
-    P[97] = 1; P[98] = 1; P[99] = "4"; P[100] = "4"; P[102] = "GQ]        e"; P[103] = 1
-    P[104] = 45174; P[105] = 1
-    P[106] = "https://dl-bs.ggpolarbear.com/live/ABHotUpdates/|https://core-bs.ggpolarbear.com/live/ABHotUpdates/|a4332cb1c1a84e51dd77441e4856ed5a"
-    P[107] = "1.9393e7b8e53e8aeb"
-    return AES.new(xK, AES.MODE_CBC, xV).encrypt(pad(ProToBuF(P), 16))
-
-
-def Strip_MajorLogin_Prefix(body):
-    if len(body) <= 64:
-        return body
+def retarget(b, repl, depth=0):
+    if b and all(32 <= c < 127 for c in b):
+        for old, new in repl.items(): b = b.replace(old, new)
+        return b
     try:
-        if 8 in Parse_ProToBuF(body):
-            return body
-    except:
-        pass
-    try:
-        if 8 in Parse_ProToBuF(body[64:]):
-            return body[64:]
-    except:
-        pass
-    return body
+        fields = pb_parse(b)
+        if depth < 8 and fields and pb_build(fields) == b:
+            return pb_build([(f, w, retarget(v, repl, depth + 1) if w == 2 else v) for f, w, v in fields])
+    except Exception: pass
+    for old, new in repl.items(): b = b.replace(old, new)
+    return b
 
+def http_post(url, data, headers, verify=True, timeout=30):
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    ctx = None if verify else ssl._create_unverified_context()
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+        return r.status, r.read()
 
-def GeT_AccEss(uid, password):
-    url = "https://100067.connect.garena.com/api/v2/oauth/guest/token:grant"
-    headers = {"User-Agent": Ua(), "Content-Type": "application/json; charset=utf-8"}
-    R = requests.post(url, headers=headers, json={"client_id": 100067, "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3", "client_type": 2, "device_id": "", "password": password, "response_type": "token", "uid": int(uid)}, verify=False, timeout=15)
-    if R.status_code not in (200, 201):
-        return None
-    try:
-        J = R.json()
-    except:
-        return None
-    if J.get("code") != 0:
-        return None
-    d = J.get("data", {})
-    return {"access_token": d.get("access_token"), "open_id": d.get("open_id")}
+def _v_major_login(fields):
+    nums = {f for f, w, v in fields}
+    if 8 in nums:
+        for f, w, v in fields:
+            if f == 8 and w == 2:
+                if isinstance(v, bytes):
+                    try:
+                        if v.decode("utf-8", "ignore").count(".") == 2: return True
+                    except Exception: pass
+                elif isinstance(v, str) and v.count(".") == 2: return True
+        return False
+    return 1 in nums and 21 in nums
 
-
-def MajorLogin(Payload):
-    url = "https://loginbp.ppmainecoonghj.com/MajorLogin"
-    headers = {"User-Agent": "UnityPlayer/2018.4.12f1 (UnityWebRequest/1.0, libcurl/8.5.0-DEV)", "Accept": "*/*", "Accept-Encoding": "deflate, gzip", "X-GA-SV": str(int(time.time())), "Authorization": "Bearer ", "X-GA": "v1 1", "ReleaseVersion": "OB55", "Content-Type": "application/x-www-form-urlencoded", "X-Unity-Version": "2018.4.12f1"}
-    R = requests.post(url, headers=headers, data=Payload, verify=False, timeout=15)
-    return R.content if R.status_code in (200, 201) and R.content else None
-
-
-def GeTLoginDaTa(client_url, payload, jwt):
-    url = f"{client_url}/GetLoginData"
-    headers = {"User-Agent": "UnityPlayer/2018.4.12f1 (UnityWebRequest/1.0, libcurl/8.5.0-DEV)", "Accept": "*/*", "Accept-Encoding": "deflate, gzip", "X-GA-SV": str(int(time.time())), "Authorization": f"Bearer {jwt}", "X-GA": "v1 1", "ReleaseVersion": "OB55", "Content-Type": "application/x-www-form-urlencoded", "X-Unity-Version": "2018.4.12f1"}
-    R = requests.post(url, headers=headers, data=payload, verify=False, timeout=15)
-    return R.content if R.status_code == 200 and R.content else None
-
-
-def _gv(fields, n):
-    v = fields.get(n)
-    if v is None:
-        return None
-    if isinstance(v, list):
-        v = v[0]
-    return v
-
-
-def ExtractMajorLogin(ml_resp):
-    body = Strip_MajorLogin_Prefix(ml_resp)
-    f = Parse_ProToBuF(body)
-    jwt_b = _gv(f, 8)
-    url_b = _gv(f, 10)
-    ts_v = _gv(f, 21)
-    key_b = _gv(f, 22)
-    iv_b = _gv(f, 23)
-    acct_v = _gv(f, 1)
-    jwt = jwt_b.decode("utf-8", errors="ignore") if isinstance(jwt_b, bytes) else jwt_b
-    url = url_b.decode("utf-8", errors="ignore") if isinstance(url_b, bytes) else url_b
-    ts = ts_v if isinstance(ts_v, int) else None
-    acct = acct_v if isinstance(acct_v, int) else None
-    if not jwt or not isinstance(key_b, bytes) or not isinstance(iv_b, bytes):
-        return None
-    return {"jwt": jwt, "url": url, "ts": ts, "key": key_b, "iv": iv_b, "account_id": acct}
-
-
-def BuildAuthToken(uid, jwt_str, ts, key, iv, mode="online"):
-    ah = f"{int(uid):x}".zfill(16)
-    enc = AES.new(key, AES.MODE_CBC, iv).encrypt(pad(jwt_str.encode(), 16)).hex()
-    th = f"{int(ts):x}"
-    if len(th) % 2:
-        th = "0" + th
-    tsz = f"{len(enc)//2:02x}"
-    pad_ = "00000" if mode == "chat" else "0000000000000"
-    return f"9015{ah}{th}{pad_}{tsz}{enc}"
-
-
-def _TuneSock(s):
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    try:
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
-    except Exception:
-        pass
-
-
-def login_account(acc_uid, acc_pass):
-    td = GeT_AccEss(acc_uid, acc_pass)
-    if not td:
-        return None
-    access_token = td["access_token"]
-    open_id = td["open_id"]
-    login_payload = PyL(access_token, open_id)
-    ml = MajorLogin(login_payload)
-    if not ml:
-        return None
-    ad = ExtractMajorLogin(ml)
-    if not ad:
-        return None
-    jwt = ad["jwt"]
-    ts = ad["ts"]
-    key = ad["key"]
-    iv = ad["iv"]
-    url = ad["url"] or "https://clientbp.ppmainecoonghj.com"
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
-    account_id = ad["account_id"]
-    ld = GeTLoginDaTa(url, login_payload, jwt)
-    if not ld:
-        return None
-    gl = Parse_ProToBuF(ld)
-    
-    def gv(n):
-        v = gl.get(n)
-        return v[0] if isinstance(v, list) else v
-    
-    player_name = gv(4).decode() if isinstance(gv(4), bytes) else ""
-    func_addr = gv(14).decode() if isinstance(gv(14), bytes) else ""
-    if not func_addr:
-        return None
-    ip, port = func_addr.split(":")
-    if not account_id:
-        account_id = gv(1) or gv(5) or 0
-    return {
-        "uid": account_id, "jwt": jwt, "ts": ts, "key": key, "iv": iv,
-        "ip": ip, "port": port, "name": player_name
-    }
-
-
-def wait_response(s, seconds, key=None, iv=None):
-    buf = b""
-    end = time.time() + seconds
-    s.settimeout(0.5)
-    while time.time() < end:
-        try:
-            chunk = s.recv(65536)
-            if not chunk:
-                break
-            buf += chunk
-        except socket.timeout:
-            continue
-        except Exception:
-            break
-    return buf
-
-
-def extract_team_data(resp):
-    owner_uid = None
-    chat_code = None
-    hex_str = resp.hex()
-    if hex_str.startswith('0500') and len(hex_str) > 100:
-        js = DeCode_PackEt(hex_str[10:])
-        if js:
+def _v_login_data(fields):
+    for f, w, v in fields:
+        if f == 14 and w == 2 and isinstance(v, bytes):
             try:
-                packet = json.loads(js)
-                owner_uid = packet.get('5', {}).get('data', {}).get('1', {}).get('data')
-                chat_code = packet.get('5', {}).get('data', {}).get('14', {}).get('data')
-            except:
-                pass
-    return owner_uid, chat_code
+                s = v.decode("utf-8", "ignore")
+                return ":" in s and s.count(".") >= 1
+            except Exception: return False
+    return False
 
+def parse_response(raw, validator):
+    if raw[:2] == b"\x1f\x8b":
+        try: raw = gzip.decompress(raw)
+        except Exception: pass
+    candidates = []
+    try: candidates.append(("aes", aes_dec(raw, STATIC_KEY, STATIC_IV)))
+    except Exception:
+        d = aes_dec_raw(raw, STATIC_KEY, STATIC_IV)
+        if d: candidates.append(("aes-raw", d))
+    if len(raw) > 64:
+        try: candidates.append(("aes@64", aes_dec(raw[64:], STATIC_KEY, STATIC_IV)))
+        except Exception:
+            d = aes_dec_raw(raw[64:], STATIC_KEY, STATIC_IV)
+            if d: candidates.append(("aes-raw@64", d))
+        candidates.append(("raw@64", raw[64:]))
+    candidates.append(("raw", raw))
+    for label, buf in candidates:
+        if not buf: continue
+        try: fields = pb_parse(buf)
+        except Exception: continue
+        if fields and validator(fields): return fields
+    raise ValueError("cannot parse server response")
+
+def _s(fields, n, default=""):
+    v = pb_get(fields, n)
+    return v.decode(errors="ignore") if isinstance(v, bytes) else default
+
+def oauth(uid, password, verify):
+    body = urllib.parse.urlencode({"uid": uid, "password": password, "response_type": "token",
+                                   "client_type": "2", "client_secret": CLIENT_SECRET,
+                                   "client_id": APP_ID}).encode()
+    st, raw = http_post(OAUTH_URL, body, {
+        "User-Agent": "GarenaMSDK/4.0.19P9(SM-M526B ;Android 13;en;IN;)",
+        "Content-Type": "application/x-www-form-urlencoded", "Connection": "close"}, verify, 20)
+    j = json.loads(raw)
+    if not j.get("open_id") or not j.get("access_token"):
+        raise RuntimeError("OAuth failed: %s" % j)
+    return j["open_id"], j["access_token"]
+
+def _client_info(open_id, access_token, platform="4", extra=None):
+    d = {3: datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 4: "free fire", 5: 1, 7: CLIENT_VERSION,
+         8: "Android OS 10 / API-29 (QP1A.190711.020/1617006012)", 9: "Handheld", 10: "Vi India", 11: "WIFI",
+         12: 1600, 13: 720, 14: "320", 15: "ARM64 FP ASIMD AES | 2301 | 8", 16: 2799,
+         17: "PowerVR Rogue GE8320", 18: "OpenGL ES 3.2 build 1.11@5425693",
+         19: "Google|9f7d6b8b-b10c-454a-852d-06332cd498eb", 20: "151.158.158.220", 21: "en",
+         22: open_id, 23: platform, 24: "Handheld", 25: "realme RMX2189", 26: REGION,
+         29: access_token, 30: 1, 41: "Vi India", 42: "WIFI", 57: "1ac4b80ecf0478a44203bf8fac6120f5",
+         60: 19799, 61: 2536, 62: 5056, 64: 2768, 65: 19999, 66: 2536, 67: 19799, 73: 1,
+         74: "/data/app/com.dts.freefiremax-ShI7E0dK8p1IiZ785pvuVQ==/lib/arm64", 76: 2,
+         77: "38f4751a330688ab124c2c804cec90a5|/data/app/com.dts.freefiremax-ShI7E0dK8p1IiZ785pvuVQ==/base.apk",
+         78: 2, 79: 2, 81: "64", 83: "2019118527", 86: "OpenGLES3", 87: 3071, 88: 4, 92: 67920,
+         93: "android_max",
+         94: "KqsHT+UrR1HKqb6+1db+Ofei+NtZr2+hbiBo3yKDL8w+8E3S5qF2IgEEe1fFQFyHRzl4iyHjHp+QsfeLbjJ6+DidTiKxm0ak2uYYa6QR4nAUdlZR",
+         95: 111107, 96: '{"cur_rate":null,"support_etc2":true}', 97: 1, 98: 1, 99: platform, 100: platform,
+         102: "", 104: 83812, 105: 1,
+         106: "https://dl-bs.ggpolarbear.com/live/ABHotUpdates/|https://core-bs.ggpolarbear.com/live/ABHotUpdates/|a4332cb1c1a84e51dd77441e4856ed5a",
+         107: "1.9393e7b8e53e8aeb"}
+    d.update(extra or {})
+    return pb_encode(d)
+
+def _ga_headers(bearer=""):
+    return {
+        "User-Agent": "UnityPlayer/2018.4.12f1 (UnityWebRequest/1.0, libcurl/8.5.0-DEV)",
+        "Accept": "*/*", "Accept-Encoding": "deflate, gzip",
+        "X-GA-SV": str(int(time.time())), "Authorization": "Bearer " + bearer,
+        "X-GA": "v1 1", "ReleaseVersion": RELEASE_VERSION,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-Unity-Version": "2018.4.12f1",
+    }
+
+def major_login(open_id, access_token, verify):
+    st, raw = http_post(MAJOR_LOGIN_URL, aes_enc(_client_info(open_id, access_token)), _ga_headers(), verify)
+    r = parse_response(raw, _v_major_login)
+    bot_uid = pb_get(r, 1)
+    jwt = _s(r, 8)
+    key = pb_get(r, 22)
+    iv  = pb_get(r, 23)
+    return {"jwt": jwt, "key": bytes(key), "iv": bytes(iv),
+            "uid": bot_uid, "kts": pb_get(r, 21) or int(time.time()),
+            "client_url": _s(r, 10) or DEFAULT_CLIENT_HOST}
+
+def get_login_data(login, open_id, access_token, verify):
+    body = aes_enc(_client_info(open_id, access_token, "4",
+                                {20: "27.59.76.15", 90: "New Delhi", 91: "DL", 99: "0"}))
+    st, raw = http_post(login["client_url"].rstrip("/") + "/GetLoginData",
+                        body, _ga_headers(login["jwt"]), verify, 20)
+    r = parse_response(raw, _v_login_data)
+    online = _s(r, 14)
+    return {"online": online, "region": _s(r, 3, REGION).upper()}
+
+def frame(ptype_hex, payload, key, iv):
+    ct = aes_enc(payload, key, iv)
+    return bytes.fromhex(ptype_hex) + struct.pack(">I", len(ct)) + ct
+
+def build_auth(opcode, region, uid, kts, jwt, key, iv):
+    enc = aes_enc(jwt.encode(), key, iv)
+    return (bytes([opcode, REGION_BYTE.get(region.upper(), 0x15)]) + int(uid).to_bytes(8, "big")
+            + int(kts).to_bytes(4, "big") + b"\x00\x00\x00\x00" + struct.pack(">I", len(enc)) + enc)
+
+def build_join(team_code, uid, key, iv):
+    tpl = base64.b64decode("".join(JOIN_TEMPLATE_B64))
+    return frame("0514", retarget(tpl, {TEMPLATE_UID: str(uid).encode(),
+                                        TEMPLATE_CODE: str(team_code).encode()}), key, iv)
+
+def build_exit(key, iv):
+    return frame("0514", pb_build([(1, 0, 7), (2, 2, pb_build([(1, 0, 0)]))]), key, iv)
 
 # ---------------------------------------------------------------- Flask API ----
 app = Flask(__name__)
 _api_lock = threading.Lock()
 
-def run_api_emote(team_code, emote_id, target_uid):
-    acc_uid, acc_pass = ACCOUNTS[0]
-    
-    # تسجيل الدخول وجلب بيانات الجلسة
-    sess = login_account(acc_uid, acc_pass)
-    if not sess:
-        raise RuntimeError("Bot login failed or could not fetch login data")
-    
-    uid = sess["uid"]
-    host = sess["ip"]
-    port = int(sess["port"])
-    key = sess["key"]
-    iv = sess["iv"]
-    jwt = sess["jwt"]
-    ts = sess["ts"]
+BOT_ACCOUNTS = [
+    ("4556621217", "S7LDEVR90TK0-S1X_TEAM"),
+    ("4556621305", "S7LG16WVVPEX-S1X_TEAM"),
+    ("4556621393", "S7L2LLJ7CDXN-S1X_TEAM"),
+    ("4556621575", "S7LBZVOMQGLD-S1X_TEAM")
+]
 
-    s = None
+def full_spam_worker(uid, password, team_code):
     try:
-        s = socket.create_connection((host, port), timeout=15)
-        s.settimeout(SOCKET_TIMEOUT)
-        _TuneSock(s)
+        # خطوات تسجيل الدخول الأصلية والكاملة بالكامل
+        open_id, access_token = oauth(uid, password, True)
+        login = major_login(open_id, access_token, True)
+        login_data = get_login_data(login, open_id, access_token, True)
         
-        auth_hex = BuildAuthToken(uid, jwt, ts, key, iv, mode="online")
-        s.sendall(bytes.fromhex(auth_hex))
-        wait_response(s, 1.0)
+        host, port = login_data["online"].rsplit(":", 1)
+        region = login_data["region"]
+        key, iv = login["key"], login["iv"]
+        bot_uid = login["uid"]
+
+        # إنشاء الاتصال بالـ TCP سرفر الخاص باللعبة
+        s = socket.create_connection((host, int(port)), timeout=10)
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         
-        # الانضمام إلى التيم
-        s.sendall(Join_Team(team_code, key, iv))
-        resp = wait_response(s, JOIN_WAIT)
-        
-        owner_uid, chat_code = extract_team_data(resp)
-        
-        if owner_uid and chat_code:
+        # إرسال حزمة المصادقة (Auth) لفتح الجلسة
+        auth_pkt = build_auth(0x8D, region, bot_uid, login["kts"], login["jwt"], key, iv)
+        s.sendall(auth_pkt)
+        time.sleep(0.2)
+
+        # 🚀 حلقة السبام المكثف داخل نفس الاتصال (دخول وخروج متكرر بسرعة قوية)
+        for _ in range(12):
             try:
-                s.sendall(AutH_Chat(3, owner_uid, chat_code, key, iv))
-                wait_response(s, AUTH_WAIT)
+                s.sendall(build_join(team_code, bot_uid, key, iv))
+                time.sleep(0.08) # فترة زمنية دقيقة جداً بين الدخول والخروج
+                s.sendall(build_exit(key, iv))
+                time.sleep(0.08)
             except Exception:
-                pass
+                break
         
-        actual_target = int(target_uid) if target_uid else TARGET_UID
-        
-        # إرسال الإيموت مرتين
-        s.sendall(Emote_k(actual_target, int(emote_id), uid, key, iv))
-        time.sleep(0.3)
-        s.sendall(Emote_k(actual_target, int(emote_id), uid, key, iv))
-        wait_response(s, DANCE_WAIT)
-        
-        # الخروج من التيم
-        s.sendall(ExiT(key, iv))
-        wait_response(s, EXIT_WAIT)
-        
-        return {
-            "ok": True,
-            "Team_Code": str(team_code),
-            "Emote_ID": int(emote_id),
-            "Target_Uid": int(actual_target),
-            "Bot_Uid": uid,
-            "message": "Emote sent successfully via script protocol"
-        }
-    finally:
-        if s:
-            try:
-                s.close()
-            except:
-                pass
+        s.close()
+    except Exception as e:
+        print(f"[Full Spam Error {uid}]:", e)
 
 @app.get("/rishu")
 def rishu_endpoint():
     team_code = (request.args.get("Tc") or "").strip()
-    emote_value = (request.args.get("Emote_id") or "").strip()
-    target_value = (
-        request.args.get("Target_Uid")
-        or request.args.get("Target_uid")
-        or request.args.get("target_uid")
-        or ""
-    ).strip()
-    
     if not team_code.isdigit():
         return jsonify(ok=False, error="Tc must be a numeric team code"), 400
-    if not emote_value:
-        emote_value = str(EMOTE_ID)
-    if not emote_value.isdigit():
-        return jsonify(ok=False, error="Emote_id must be a numeric emote ID"), 400
-    if target_value and not target_value.isdigit():
-        return jsonify(ok=False, error="Target_Uid must be numeric"), 400
 
     try:
         with _api_lock:
-            result = run_api_emote(team_code, int(emote_value), int(target_value) if target_value else TARGET_UID)
-        return jsonify(result), 200
+            threads = []
+            for uid, pwd in BOT_ACCOUNTS:
+                if not uid:
+                    continue
+                t = threading.Thread(target=full_spam_worker, args=(uid, pwd, team_code))
+                t.start()
+                threads.append(t)
+            
+            for t in threads:
+                t.join(timeout=8.0)
+
+        return jsonify(ok=True, Team_Code=team_code, message="Full spam execution completed!"), 200
     except Exception as exc:
-        print("[api] request failed:", exc)
         return jsonify(ok=False, error=str(exc)), 500
 
-
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "5000")),
-        threaded=True
-    )
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), threaded=True)
