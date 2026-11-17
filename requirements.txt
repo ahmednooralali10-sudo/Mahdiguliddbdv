@@ -1,4 +1,6 @@
 Flask
+requests
 pycryptodome
-cryptography
+protobuf-decoder
+urllib3
 gunicorn
